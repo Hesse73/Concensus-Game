@@ -1,7 +1,7 @@
 import numpy as np
 import os
 from tqdm import tqdm
-from typing import Tuple
+from typing import Tuple, List
 import seaborn as sns
 import matplotlib.pyplot as plt
 
@@ -10,7 +10,7 @@ sns.set_theme()
 signal_mapping = {0: 'incorrect', 1:'correct'}
 
 
-def get_probs_from_LLM(task_str: str, candidate_set: list[str]) -> Tuple[np.array, np.array]:
+def get_probs_from_LLM(task_str: str, candidate_set: List[str]) -> Tuple[np.array, np.array]:
     """
     Using the task string and candidate answers as prompt
     Generate normalized probability predicted by LLM
@@ -29,7 +29,7 @@ def get_probs_from_LLM(task_str: str, candidate_set: list[str]) -> Tuple[np.arra
         (candidate_size - 1),  0.1 / (candidate_size - 1)
     tmp = np.random.random(size=dis_probs.shape)
     dis_probs = tmp/tmp.sum(axis=-1, keepdims=True)
-    dis_probs[0], dis_probs[-1] = [0.9, 0.1], [0.5, 0.5]
+    dis_probs[0], dis_probs[-1] = [0.5, 0.5], [0.5, 0.5]
 
     return gen_probs, dis_probs
 
@@ -45,9 +45,12 @@ class Consensus_Game:
     What determines the game is
     1. task x
     2. candidates set Y
+
+    Consensus game: https://arxiv.org/pdf/2310.09139.pdf
+    PiKL: https://proceedings.mlr.press/v162/jacob22a/jacob22a.pdf
     """
 
-    def __init__(self, task_str: str, candidate_set: list[str]):
+    def __init__(self, task_str: str, candidate_set: List[str]):
         # save args
         self.task_str = task_str
         self.candidate_set = candidate_set
@@ -59,37 +62,44 @@ class Consensus_Game:
         self.init_gen, self.init_dis = get_probs_from_LLM(
             task_str, candidate_set)
         # current probs
-        self.gen, self.dis = np.copy(self.init_gen), np.copy(self.init_dis)
-        self.Q_gen, self.Q_dis = np.zeros_like(
-            self.gen), np.zeros_like(self.dis)
+        self.gen = self.Q_gen = np.zeros_like(self.init_gen)
+        self.dis = self.Q_dis = np.zeros_like(self.init_dis)
 
     def naive_run(self, max_iter=5000):
         llog_init_gen, llog_init_dis = self.lam_g*np.log(self.init_gen), self.lam_d*np.log(self.init_dis)
         for t in tqdm(range(1, max_iter+1)):
-            ## run the game
-            # 1. nature selects v
-            signal = np.random.randint(0, 2)
-            # 2. generator generates y
-            y = np.random.choice(self.candidate_size, p=self.gen[signal])
-            ## update weights
-            # 1. Q value, perform incremental update
-            self.Q_gen[signal] += 1/2/t*self.dis[y, signal]
-            self.Q_dis[y] += 1/2/t*self.gen[signal, y]
-            # 2. PiKL update
+            ## set the policy according to Q
             rate_gen, rate_dis = 1/(self.eta_g*t) + self.lam_g, 1/(self.eta_d*t)+self.lam_d
             next_gen = np.exp((self.Q_gen + llog_init_gen) / rate_gen)
             next_dis = np.exp((self.Q_dis + llog_init_dis) / rate_dis)
             self.gen = next_gen / next_gen.sum(axis=-1, keepdims=True)
             self.dis = next_dis / next_dis.sum(axis=-1, keepdims=True)
+            ## run the game
+            # 1. nature selects v
+            signal = np.random.randint(0, 2)
+            # 2. generator generates y
+            y = np.random.choice(self.candidate_size, p=self.gen[signal])
+            # 3. discriminatory evaluate
+            v = np.random.choice(2, p=self.dis[y])
+            utility = v == signal
+            ## update Q, perform incremental update
+            self.Q_gen[signal] += 1/2/t*utility #self.dis[y, signal]
+            self.Q_dis[y] += 1/2/t*utility #self.gen[signal, y]
+            if t % 1000 == 1:
+                self.plot_policy(f'iter={t}.png')
 
-    def plot_policy(self, filename='fig.pdf'):
+    def plot_policy(self, filename='fig.pdf', init_policy=False):
+        if init_policy:
+            gen, dis = self.init_gen, self.init_dis
+        else:
+            gen, dis = self.gen, self.dis
         dir_name = 'figs'
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         fig, axs = plt.subplots(1,2, figsize=(10,4))
-        sns.heatmap(self.gen, yticklabels=signal_mapping.values(),xticklabels=self.candidate_set,
+        sns.heatmap(gen, yticklabels=signal_mapping.values(),xticklabels=self.candidate_set,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[0])
-        sns.heatmap(self.dis,xticklabels=signal_mapping.values(),yticklabels=self.candidate_set,
+        sns.heatmap(dis,xticklabels=signal_mapping.values(),yticklabels=self.candidate_set,
         cmap='crest', annot=True, linewidth=.5, ax=axs[1])
         axs[0].set_title('Generator')
         axs[1].set_title('Discriminator')
@@ -104,7 +114,7 @@ if __name__ == '__main__':
     candidate_set = ['A.yes', 'B.maybe', 'C.obtuse angle']
     game = Consensus_Game(task_str=task_str, candidate_set=candidate_set)
 
-    game.plot_policy('init_policy.pdf')
+    game.plot_policy('init_policy.pdf', init_policy=True)
 
     game.naive_run()
 
