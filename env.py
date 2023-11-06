@@ -147,7 +147,7 @@ if __name__ == '__main__':
     candidate_set = ['A.Honolulu', 'B.Chicago', 'C.Nairobi', "D.NYC"]
     game = Consensus_Game(task_str=task_str, candidate_set=candidate_set)
 
-    game.plot_policy('init_policy.pdf', init_policy=True)
+    game.plot_policy('init_policy.png', init_policy=True)
     game.run()
     game.plot_policy('end_policy.png')
 
