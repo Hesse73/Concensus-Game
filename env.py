@@ -4,32 +4,42 @@ from tqdm import tqdm
 from typing import Tuple, List
 import seaborn as sns
 import matplotlib.pyplot as plt
+from test_llama import *
 
 np.random.seed(42)
 sns.set_theme()
 signal_mapping = {0: 'incorrect', 1: 'correct'}
 
 
-def get_probs_from_LLM(task_str: str, candidate_set: List[str]) -> Tuple[np.array, np.array]:
+def get_probs_from_LLM(task_str: str, candidate_text: List[str], candidate_id: List[str]) -> Tuple[np.array, np.array]:
     """
     Using the task string and candidate answers as prompt
     Generate normalized probability predicted by LLM
 
     Return: Generator probs, Discriminator probs
     """
-    candidate_size = len(candidate_set)
+    candidate_size = len(candidate_text)
     # gen: P(y|v), 2->Y
     gen_probs = np.empty([2, candidate_size], dtype=float)
     # dis: P(v|y), Y->2
     dis_probs = np.empty([candidate_size, 2], dtype=float)
 
-    # TODO: get probs from LLM logits
-    gen_probs[0][0], gen_probs[1][-1] = 0.9, 0.9
-    gen_probs[0][1:], gen_probs[1][:-1] = 0.1 / \
-        (candidate_size - 1),  0.1 / (candidate_size - 1)
-    tmp = np.random.random(size=dis_probs.shape)
-    dis_probs = tmp/tmp.sum(axis=-1, keepdims=True)
-    dis_probs[0], dis_probs[-1] = [0.9, 0.1], [0.4, 0.6]
+    # use default path if no local file
+    tokenizer, model = load_llama(path='D:/Codes/transformers/Llama-2-7b-hf')
+
+    # generator
+    for signal in range(2):
+        is_correct = signal_mapping[signal] == 'correct'
+        gen_probs[signal] = get_norm_probs(tokenizer, model, task_prompt=gen_task(
+            task_str, candidate_text, candidate_id, correct=is_correct),
+            candidate_set=candidate_id, verbose=False)
+
+    # discriminator
+    dis_candidate = ['False', 'True']
+    for idx, ans_text in enumerate(candidate_text):
+        dis_probs[idx] = get_norm_probs(tokenizer, model, task_prompt=dis_task(
+            task_str, ans_text, incor_text=dis_candidate[0], cor_text=dis_candidate[1]),
+            candidate_set=dis_candidate, verbose=False)
 
     return gen_probs, dis_probs
 
@@ -50,17 +60,18 @@ class Consensus_Game:
     PiKL: https://proceedings.mlr.press/v162/jacob22a/jacob22a.pdf
     """
 
-    def __init__(self, task_str: str, candidate_set: List[str]):
+    def __init__(self, task_str: str, candidate_text: List[str], candidate_id: List[str]):
         # save args
         self.task_str = task_str
-        self.candidate_set = candidate_set
-        self.candidate_size = len(candidate_set)
+        self.candidate_text = candidate_text
+        self.candidate_id = candidate_id
+        self.candidate_size = len(candidate_text)
         # learning param
         self.eta_g = self.eta_d = 0.1
         self.lam_g = self.lam_d = 0.1
         # initialize probs
         self.init_gen, self.init_dis = get_probs_from_LLM(
-            task_str, candidate_set)
+            task_str, candidate_text, candidate_id)
         # current probs
         self.gen = self.Q_gen = np.zeros_like(self.init_gen)
         self.dis = self.Q_dis = np.zeros_like(self.init_dis)
@@ -128,15 +139,14 @@ class Consensus_Game:
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-        plot_candidate_set = [x[0] for x in self.candidate_set]
-        sns.heatmap(gen, yticklabels=signal_mapping.values(), xticklabels=plot_candidate_set,
+        sns.heatmap(gen, yticklabels=signal_mapping.values(), xticklabels=self.candidate_id,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[0])
-        sns.heatmap(dis, xticklabels=signal_mapping.values(), yticklabels=plot_candidate_set,
+        sns.heatmap(dis, xticklabels=signal_mapping.values(), yticklabels=self.candidate_id,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[1])
         axs[0].set_title('Generator')
         axs[1].set_title('Discriminator')
         fig.suptitle(
-            f'Q:"{self.task_str}", answers: {" ".join(self.candidate_set)}')
+            f'Q:"{self.task_str}", answers: {" ".join(["{}. {}".format(x,y) for x,y in zip(self.candidate_id, self.candidate_text)])}')
         plt.tight_layout()
         plt.savefig(os.path.join(dir_name, filename))
 
@@ -144,8 +154,10 @@ class Consensus_Game:
 if __name__ == '__main__':
 
     task_str = 'Where was Barack Obama born?'
-    candidate_set = ['A.Honolulu', 'B.Chicago', 'C.Nairobi', "D.NYC"]
-    game = Consensus_Game(task_str=task_str, candidate_set=candidate_set)
+    candidate_text = ['Chicago', 'honolulu', 'Nairobi', 'NYC']
+    candidate_id = ['A', 'B', 'C', 'D']
+    game = Consensus_Game(
+        task_str=task_str, candidate_text=candidate_text, candidate_id=candidate_id)
 
     game.plot_policy('init_policy.png', init_policy=True)
     game.run()
