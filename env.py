@@ -119,7 +119,7 @@ class Consensus_Game:
             if t % int(max_iter/5) == 1:
                 self.plot_policy(f'naive_iter={t}.png')
 
-    def plot_policy(self, filename='fig.pdf', init_policy=False):
+    def plot_policy(self, filename='fig.png', init_policy=False):
         if init_policy:
             gen, dis = self.init_gen, self.init_dis
         else:
@@ -128,28 +128,29 @@ class Consensus_Game:
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
         fig, axs = plt.subplots(1, 2, figsize=(10, 4))
-        sns.heatmap(gen, yticklabels=signal_mapping.values(), xticklabels=self.candidate_set,
+        plot_candidate_set = [x[0] for x in self.candidate_set]
+        sns.heatmap(gen, yticklabels=signal_mapping.values(), xticklabels=plot_candidate_set,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[0])
-        sns.heatmap(dis, xticklabels=signal_mapping.values(), yticklabels=self.candidate_set,
+        sns.heatmap(dis, xticklabels=signal_mapping.values(), yticklabels=plot_candidate_set,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[1])
         axs[0].set_title('Generator')
         axs[1].set_title('Discriminator')
         fig.suptitle(
-            f'Q:{self.task_str}, Answers:{" ".join(self.candidate_set)}')
+            f'Q:"{self.task_str}", answers: {" ".join(self.candidate_set)}')
         plt.tight_layout()
         plt.savefig(os.path.join(dir_name, filename))
 
 
 if __name__ == '__main__':
 
-    task_str = 'Is it possible that he acted it? Did he act it?'
-    candidate_set = ['A.yes', 'B.maybe', 'C.obtuse angle']
+    task_str = 'Where was Barack Obama born?'
+    candidate_set = ['A.Honolulu', 'B.Chicago', 'C.Nairobi', "D.NYC"]
     game = Consensus_Game(task_str=task_str, candidate_set=candidate_set)
 
     game.plot_policy('init_policy.pdf', init_policy=True)
     game.run()
-    game.plot_policy('end_policy.pdf')
+    game.plot_policy('end_policy.png')
 
     game.reset()
     game.naive_run()
-    game.plot_policy('naive_end_policy.pdf')
+    game.plot_policy('naive_end_policy.png')
