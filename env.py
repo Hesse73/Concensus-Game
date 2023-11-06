@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 
 np.random.seed(42)
 sns.set_theme()
-signal_mapping = {0: 'incorrect', 1:'correct'}
+signal_mapping = {0: 'incorrect', 1: 'correct'}
 
 
 def get_probs_from_LLM(task_str: str, candidate_set: List[str]) -> Tuple[np.array, np.array]:
@@ -29,7 +29,7 @@ def get_probs_from_LLM(task_str: str, candidate_set: List[str]) -> Tuple[np.arra
         (candidate_size - 1),  0.1 / (candidate_size - 1)
     tmp = np.random.random(size=dis_probs.shape)
     dis_probs = tmp/tmp.sum(axis=-1, keepdims=True)
-    dis_probs[0], dis_probs[-1] = [0.5, 0.5], [0.5, 0.5]
+    dis_probs[0], dis_probs[-1] = [0.9, 0.1], [0.4, 0.6]
 
     return gen_probs, dis_probs
 
@@ -65,11 +65,17 @@ class Consensus_Game:
         self.gen = self.Q_gen = np.zeros_like(self.init_gen)
         self.dis = self.Q_dis = np.zeros_like(self.init_dis)
 
-    def naive_run(self, max_iter=5000):
-        llog_init_gen, llog_init_dis = self.lam_g*np.log(self.init_gen), self.lam_d*np.log(self.init_dis)
+    def reset(self):
+        self.gen = self.Q_gen = np.zeros_like(self.init_gen)
+        self.dis = self.Q_dis = np.zeros_like(self.init_dis)
+
+    def run(self, max_iter=5000):
+        llog_init_gen, llog_init_dis = self.lam_g * \
+            np.log(self.init_gen), self.lam_d*np.log(self.init_dis)
         for t in tqdm(range(1, max_iter+1)):
             ## set the policy according to Q
-            rate_gen, rate_dis = 1/(self.eta_g*t) + self.lam_g, 1/(self.eta_d*t)+self.lam_d
+            rate_gen, rate_dis = 1/(self.eta_g*t) + \
+                self.lam_g, 1/(self.eta_d*t) + self.lam_d
             next_gen = np.exp((self.Q_gen + llog_init_gen) / rate_gen)
             next_dis = np.exp((self.Q_dis + llog_init_dis) / rate_dis)
             self.gen = next_gen / next_gen.sum(axis=-1, keepdims=True)
@@ -82,11 +88,36 @@ class Consensus_Game:
             # 3. discriminatory evaluate
             v = np.random.choice(2, p=self.dis[y])
             utility = v == signal
+            # dis_cfr = np.arange(2) == signal
             ## update Q, perform incremental update
-            self.Q_gen[signal] += 1/2/t*utility #self.dis[y, signal]
-            self.Q_dis[y] += 1/2/t*utility #self.gen[signal, y]
-            if t % 1000 == 1:
+            self.Q_gen[signal, y] += 1/t*(utility/2 - self.Q_gen[signal, y])
+            self.Q_dis[y, signal] += 1/t*(utility/2 - self.Q_dis[y, signal])
+            # self.Q_dis[y] += 1/2/t*dis_cfr
+            if t % int(max_iter/5) == 1:
                 self.plot_policy(f'iter={t}.png')
+
+    def naive_run(self, max_iter=5000):
+        llog_init_gen, llog_init_dis = self.lam_g * \
+            np.log(self.init_gen), self.lam_d*np.log(self.init_dis)
+        # set initial policy
+        self.gen, self.dis = self.init_gen.copy(), self.init_dis.copy()
+        for t in tqdm(range(1, max_iter+1)):
+            ## randomize signal
+            signal = np.random.randint(0, 2)
+            ## update Q using probs directly
+            self.Q_gen[signal] += 1/t * \
+                (self.dis[:, signal]/2 - self.Q_gen[signal])
+            self.Q_dis[:, signal] += 1/t * \
+                (self.gen[signal]/2 - self.Q_dis[:, signal])
+            ## set the policy according to Q
+            rate_gen, rate_dis = 1/(self.eta_g*t) + \
+                self.lam_g, 1/(self.eta_d*t) + self.lam_d
+            next_gen = np.exp((self.Q_gen + llog_init_gen) / rate_gen)
+            next_dis = np.exp((self.Q_dis + llog_init_dis) / rate_dis)
+            self.gen = next_gen / next_gen.sum(axis=-1, keepdims=True)
+            self.dis = next_dis / next_dis.sum(axis=-1, keepdims=True)
+            if t % int(max_iter/5) == 1:
+                self.plot_policy(f'naive_iter={t}.png')
 
     def plot_policy(self, filename='fig.pdf', init_policy=False):
         if init_policy:
@@ -96,26 +127,29 @@ class Consensus_Game:
         dir_name = 'figs'
         if not os.path.exists(dir_name):
             os.makedirs(dir_name)
-        fig, axs = plt.subplots(1,2, figsize=(10,4))
-        sns.heatmap(gen, yticklabels=signal_mapping.values(),xticklabels=self.candidate_set,
+        fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+        sns.heatmap(gen, yticklabels=signal_mapping.values(), xticklabels=self.candidate_set,
                     cmap='crest', annot=True, linewidth=.5, ax=axs[0])
-        sns.heatmap(dis,xticklabels=signal_mapping.values(),yticklabels=self.candidate_set,
-        cmap='crest', annot=True, linewidth=.5, ax=axs[1])
+        sns.heatmap(dis, xticklabels=signal_mapping.values(), yticklabels=self.candidate_set,
+                    cmap='crest', annot=True, linewidth=.5, ax=axs[1])
         axs[0].set_title('Generator')
         axs[1].set_title('Discriminator')
-        fig.suptitle(f'Q:{self.task_str}, Answers:{" ".join(self.candidate_set)}')
+        fig.suptitle(
+            f'Q:{self.task_str}, Answers:{" ".join(self.candidate_set)}')
         plt.tight_layout()
         plt.savefig(os.path.join(dir_name, filename))
 
 
 if __name__ == '__main__':
-    
+
     task_str = 'Is it possible that he acted it? Did he act it?'
     candidate_set = ['A.yes', 'B.maybe', 'C.obtuse angle']
     game = Consensus_Game(task_str=task_str, candidate_set=candidate_set)
 
     game.plot_policy('init_policy.pdf', init_policy=True)
-
-    game.naive_run()
-
+    game.run()
     game.plot_policy('end_policy.pdf')
+
+    game.reset()
+    game.naive_run()
+    game.plot_policy('naive_end_policy.pdf')
